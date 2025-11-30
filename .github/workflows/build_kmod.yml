@@ -33,14 +33,11 @@ jobs:
       - name: Configure build for kmod-mtd-rw
         run: |
           cd openwrt
-          cat > .config <<EOF
-CONFIG_TARGET_aarch64=y
-CONFIG_TARGET_aarch64_cortex-a53=y
-CONFIG_KERNEL_5_15=y
-CONFIG_PACKAGE_kmod-mtd-rw=y
-EOF
+          echo "CONFIG_TARGET_aarch64=y" > .config
+          echo "CONFIG_TARGET_aarch64_cortex-a53=y" >> .config
+          echo "CONFIG_KERNEL_5_15=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-mtd-rw=y" >> .config
           make defconfig
-
       - name: Compile kmod-mtd-rw
         run: |
           cd openwrt
