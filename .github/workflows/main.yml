@@ -12,9 +12,9 @@ env:
   # 1. 源码配置
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: openwrt-23.05
-  # 指定 Commit Hash 以匹配你当前的固件版本 (git-24.148.43905-2891ca4)
+  # 指定 Commit Hash 以匹配你当前的固件版本 (OpenWrt 23.05-SNAPSHOT r23001+886-38c150612c)
   # 如果想编译分支最新版，请将此项留空
-  REPO_COMMIT: 2891ca4 
+  REPO_COMMIT: 38c150612c 
 
   # 2. 硬件目标配置 (Cudy TR3000)
   TARGET_BOARD: mediatek
