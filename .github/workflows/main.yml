@@ -1,42 +1,36 @@
-name: Build OpenWrt for Cudy TR3000
+name: Build OpenWrt for Cudy TR3000 (Locked to 38c150612c + LuCI 2891ca4)
 
 on:
   workflow_dispatch:
     inputs:
-      openwrt_ver:
-        description: 'OpenWrt branch/tag (23.05-SNAPSHOT, main, 24.10.0 等)'
-        required: true
-        default: 23.05-SNAPSHOT
       custom_config:
         description: '自定义 .config 完整链接（留空则使用内置最优配置）'
         required: false
         type: string
       ssh_actions:
-        description: '编译完开启 SSH 调试（调试用）'
+        description: '编译完开启 SSH 调试'
         required: false
         type: boolean
         default: false
 
 env:
+  OPENWRT_COMMIT: 38c150612c        # 你当前使用的精确 commit
+  LUCI_COMMIT: 2891ca4              # 你当前 LuCI 的精确 commit
   TARGET: mediatek/filogic
   SUBTARGET: mt7981
   DEVICE: cudy_tr3000-v1
-  
-  # 强制加入 kmod-mtd-rw（允许对 NAND/UBI 进行写操作，解锁根分区写权限必备）
   PACKAGES: >-
     luci luci-ssl-openssl luci-app-opkg luci-app-sqm
     luci-app-wol luci-app-uugameaccel luci-app-ddns ddns-scripts-cloudflare
     luci-app-turboacc kmod-mt7981-firmware wpad-openssl
-    kmod-mtd-rw kmod-mtd-rw_insmod   # <── 关键两行，强制包含
+    kmod-mtd-rw kmod-mtd-rw-insmod
     -wpad-basic-mbedtls -wpad-mini -wpad-basic-wolfssl
-
   FILES: "files"
   KEEP_DAYS: 7
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -47,34 +41,40 @@ jobs:
         sudo docker image prune -af || true
         df -h
 
-    - name: Install build dependencies
+    - name: Install dependencies
       run: |
-        sudo apt update -y
-        sudo apt install -y build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-            zlib1g-dev lzop python3 python3-pip rsync unzip wget time \
-            qemu-utils u-boot-tools
+        sudo apt update -y && sudo apt install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev zlib1g-dev \
+            lzop python3 python3-pip rsync unzip wget time qemu-utils u-boot-tools
 
-    - name: Clone OpenWrt source
+    # 精确锁定 OpenWrt 源码到 38c150612c
+    - name: Clone OpenWrt source (locked commit)
       run: |
-        git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
+        git clone https://git.openwrt.org/openwrt/openwrt.git openwrt
         cd openwrt
-        if [[ "${{ inputs.openwrt_ver }}" != "main" && "${{ inputs.openwrt_ver }}" != "master" ]]; then
-          git fetch --depth=1 origin ${{ inputs.openwrt_ver }}
-          git checkout ${{ inputs.openwrt_ver }}
-        fi
+        git checkout ${{ env.OPENWRT_COMMIT }}
 
-    - name: Update & install feeds
+    # 精确锁定 LuCI 到 2891ca4
+    - name: Checkout LuCI to exact commit
+      run: |
+        cd openwrt
+        rm -rf feeds/luci
+        git clone https://github.com/openwrt/luci feeds/luci
+        cd feeds/luci
+        git checkout ${{ env.LUCI_COMMIT }}
+
+    - name: Update & install feeds (skip official luci)
       run: |
         cd openwrt
         ./scripts/feeds update -a
+        # 手动安装我们自己 clone 的 luci
+        ./scripts/feeds install -a -p luci
         ./scripts/feeds install -a
 
     - name: Generate or download config
       run: |
         cd openwrt
         if [[ -n "${{ inputs.custom_config }}" ]]; then
-          echo "使用用户提供的自定义配置"
           wget -q ${{ inputs.custom_config }} -O .config
         else
           cat > .config <<EOF
@@ -82,28 +82,18 @@ jobs:
         CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
         CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y
 
-        # 强制启用 mtd-rw（去只读锁必备）
         CONFIG_PACKAGE_kmod-mtd-rw=y
-        CONFIG_PACKAGE_kmod-mtd-rw_insmod=y   # 部分内核需要这个子包
+        CONFIG_PACKAGE_kmod-mtd-rw-insmod=y
 
-        # LuCI 与常用软件包
         CONFIG_PACKAGE_luci=y
         CONFIG_LUCI_SRCDIET=y
         ${{ env.PACKAGES }}
 
-        # 性能相关
         CONFIG_PACKAGE_kmod-tcp-bbr=y
         CONFIG_PACKAGE_luci-app-turboacc=y
         CONFIG_TURBOACC_ENABLE_SHORTCUT_FE=y
         CONFIG_TURBOACC_ENABLE_FULLCONENAT=y
 
-        # 其他常用
-        CONFIG_PACKAGE_luci-app-ttyd=y
-        CONFIG_PACKAGE_luci-app-adguardhome=y
-        CONFIG_PACKAGE_luci-app-passwall=y
-        CONFIG_PACKAGE_luci-app-openclash=y
-
-        # 版本信息
         CONFIG_GR64=y
         CONFIG_IMAGEOPT=y
         CONFIG_VERSIONOPT=y
@@ -111,48 +101,56 @@ jobs:
         CONFIG_VERSION_NUMBER="$(date +%Y%m%d)"
         EOF
         fi
-
         make defconfig
 
-    - name: Copy custom files (if exist)
+    - name: Copy custom files
       if: env.FILES != ''
       run: |
-        if [ -d "${{ github.workspace }}/${{ env.FILES }}" ]; then
-          mkdir -p openwrt/files
+        [ -d "${{ github.workspace }}/${{ env.FILES }}" ] && \
           cp -r ${{ github.workspace }}/${{ env.FILES }}/* openwrt/files/
-        fi
 
-    - name: Cache dl directory
+    - name: Cache dl/
       uses: actions/cache@v4
       with:
         path: openwrt/dl
-        key: dl-${{ hashFiles('openwrt/.config') }}-${{ inputs.openwrt_ver }}
-        restore-keys: dl-${{ inputs.openwrt_ver }}-
+        key: dl-${{ env.OPENWRT_COMMIT }}-${{ env.LUCI_COMMIT }}-${{ hashFiles('openwrt/.config') }}
+        restore-keys: dl-${{ env.OPENWRT_COMMIT }}-
 
-    - name: Build firmware
+    - name: Build firmware + packages
       run: |
         cd openwrt
         make -j$(nproc) V=s || make -j1 V=s
 
-    - name: Organize artifacts
+    # 固件
+    - name: Collect firmware
       run: |
-        mkdir -p artifacts
-        find openwrt/bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.squashfs*" \) -exec cp {} artifacts/ \;
-        cd artifacts
-        sha256sum * > sha256sums
-        ls -lh
+        mkdir -p artifacts/firmware
+        find openwrt/bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.squashfs*" \) \
+          -exec cp {} artifacts/firmware/ \;
+        (cd artifacts/firmware && sha256sum * > sha256sums)
 
-    - name: Upload artifacts
+    # 单独打包 kmod-mtd-rw ipk
+    - name: Collect kmod-mtd-rw ipk
+      run: |
+        mkdir -p artifacts/ipk-control
+        find openwrt/bin/packages -type f -name "kmod-mtd-rw*" -exec cp {} artifacts/ipk-control/ \;
+        (cd artifacts/ipk-control && sha256sum * > sha256sums || true)
+
+    # 上传
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: OpenWrt-TR3000-${{ inputs.openwrt_ver }}-${{ github.sha }}
-        path: artifacts/*
-        retention-days: ${{ env.KEEP_DAYS }}
+        name: Firmware-locked-${{ github.sha }}
+        path: artifacts/firmware/*
 
-    - name: Enable SSH debug (optional)
+    - name: Upload kmod-mtd-rw ipk
+      uses: actions/upload-artifact@v4
+      with:
+        name: kmod-mtd-rw-ipk-${{ github.sha }}
+        path: artifacts/ipk-control/*
+
+    - name: Enable SSH debug
       if: inputs.ssh_actions == true
       uses: luchihoratiu/debug-via-ssh@main
       with:
         SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        DEBUG_SCRIPT: |
-          cd ~/openwrt && bash
