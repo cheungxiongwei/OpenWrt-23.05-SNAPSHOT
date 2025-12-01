@@ -1,0 +1,16 @@
+--- a/v4l2loopback.c
++++ b/v4l2loopback.c
+@@ -2238,6 +2238,7 @@ static int v4l2_loopback_mmap(struct file *file, struct vm_area_struct *vma)
+        struct v4l2_loopback_device *dev = fh->dev;
+        unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+        unsigned long phys;
++       u32 index;
+
+        if (!dev->buffer_size)
+                return -EINVAL;
+@@ -2243,7 +2244,7 @@ static int v4l2_loopback_mmap(struct file *file, struct vm_area_struct *vma)
+        if (offset >= dev->memory)
+                return -EINVAL;
+
+-       u32 index = offset / dev->buffer_size;
++       index = offset / dev->buffer_size;
