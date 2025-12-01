@@ -1,30 +1,22 @@
-name: Build OpenWrt for Cudy TR3000 (Locked to 38c150612c + LuCI 2891ca4)
+name: Build OpenWrt Cudy TR3000 (38c150612c + luci 2891ca4)
 
 on:
   workflow_dispatch:
     inputs:
       custom_config:
-        description: '自定义 .config 完整链接（留空则使用内置最优配置）'
+        description: '自定义 .config 链接（留空使用内置配置）'
         required: false
-        type: string
       ssh_actions:
         description: '编译完开启 SSH 调试'
-        required: false
         type: boolean
         default: false
 
 env:
-  OPENWRT_COMMIT: 38c150612c        # 你当前使用的精确 commit
-  LUCI_COMMIT: 2891ca4              # 你当前 LuCI 的精确 commit
+  OPENWRT_COMMIT: 38c150612c
+  LUCI_COMMIT: 2891ca4
   TARGET: mediatek/filogic
   SUBTARGET: mt7981
   DEVICE: cudy_tr3000-v1
-  PACKAGES: >-
-    luci luci-ssl-openssl luci-app-opkg luci-app-sqm
-    luci-app-wol luci-app-uugameaccel luci-app-ddns ddns-scripts-cloudflare
-    luci-app-turboacc kmod-mt7981-firmware wpad-openssl
-    kmod-mtd-rw kmod-mtd-rw-insmod
-    -wpad-basic-mbedtls -wpad-mini -wpad-basic-wolfssl
   FILES: "files"
   KEEP_DAYS: 7
 
@@ -43,35 +35,36 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo apt update -y && sudo apt install -y build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev zlib1g-dev \
-            lzop python3 python3-pip rsync unzip wget time qemu-utils u-boot-tools
+        sudo apt update -y
+        sudo apt install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+            zlib1g-dev lzop python3 python3-pip rsync unzip wget time
 
-    # 精确锁定 OpenWrt 源码到 38c150612c
-    - name: Clone OpenWrt source (locked commit)
+    # 1. 先 clone 并锁定 OpenWrt 主源码
+    - name: Clone OpenWrt and lock commit
       run: |
         git clone https://git.openwrt.org/openwrt/openwrt.git openwrt
         cd openwrt
         git checkout ${{ env.OPENWRT_COMMIT }}
 
-    # 精确锁定 LuCI 到 2891ca4
-    - name: Checkout LuCI to exact commit
+    # 2. 删除官方 feeds.conf.default 里默认的 luci 行，防止冲突
+    - name: Remove official luci feed
       run: |
         cd openwrt
-        rm -rf feeds/luci
-        git clone https://github.com/openwrt/luci feeds/luci
-        cd feeds/luci
-        git checkout ${{ env.LUCI_COMMIT }}
+        sed -i '/\/luci$/d' feeds.conf.default
+        # 改为我们自己指定的 commit
+        echo "src-git-full luci https://github.com/openwrt/luci.git;${{ env.LUCI_COMMIT }}" >> feeds.conf.default
+        cat feeds.conf.default
 
-    - name: Update & install feeds (skip official luci)
+    # 3. 更新 feeds（此时 luci 已经是我们指定的 commit）
+    - name: Update feeds
       run: |
         cd openwrt
         ./scripts/feeds update -a
-        # 手动安装我们自己 clone 的 luci
-        ./scripts/feeds install -a -p luci
         ./scripts/feeds install -a
 
-    - name: Generate or download config
+    # 4. 生成配置（强制包含 kmod-mtd-rw）
+    - name: Generate .config
       run: |
         cd openwrt
         if [[ -n "${{ inputs.custom_config }}" ]]; then
@@ -83,19 +76,20 @@ jobs:
         CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y
 
         CONFIG_PACKAGE_kmod-mtd-rw=y
-        CONFIG_PACKAGE_kmod-mtd-rw-insmod=y
+        CONFIG_PACKAGE_kmod-mtd-rw_insmod=y
 
         CONFIG_PACKAGE_luci=y
-        CONFIG_LUCI_SRCDIET=y
-        ${{ env.PACKAGES }}
-
-        CONFIG_PACKAGE_kmod-tcp-bbr=y
+        CONFIG_PACKAGE_luci-ssl-openssl=y
+        CONFIG_PACKAGE_luci-app-opkg=y
         CONFIG_PACKAGE_luci-app-turboacc=y
+        CONFIG_PACKAGE_wpad-openssl=y
+        CONFIG_PACKAGE_kmod-mt7981-firmware=y
+
+        CONFIG_LUCI_SRCDIET=y
+        CONFIG_PACKAGE_kmod-tcp-bbr=y
         CONFIG_TURBOACC_ENABLE_SHORTCUT_FE=y
         CONFIG_TURBOACC_ENABLE_FULLCONENAT=y
 
-        CONFIG_GR64=y
-        CONFIG_IMAGEOPT=y
         CONFIG_VERSIONOPT=y
         CONFIG_VERSION_DIST="OpenWrt"
         CONFIG_VERSION_NUMBER="$(date +%Y%m%d)"
@@ -106,48 +100,42 @@ jobs:
     - name: Copy custom files
       if: env.FILES != ''
       run: |
-        [ -d "${{ github.workspace }}/${{ env.FILES }}" ] && \
-          cp -r ${{ github.workspace }}/${{ env.FILES }}/* openwrt/files/
+        [ -d "${{ github.workspace }}/${{ env.FILES }}" ] && cp -r ${{ github.workspace }}/${{ env.FILES }}/* openwrt/files/
 
-    - name: Cache dl/
+    - name: Cache dl
       uses: actions/cache@v4
       with:
         path: openwrt/dl
-        key: dl-${{ env.OPENWRT_COMMIT }}-${{ env.LUCI_COMMIT }}-${{ hashFiles('openwrt/.config') }}
-        restore-keys: dl-${{ env.OPENWRT_COMMIT }}-
+        key: dl-${{ env.OPENWRT_COMMIT }}-${{ env.LUCI_COMMIT }}
 
-    - name: Build firmware + packages
+    - name: Build
       run: |
         cd openwrt
         make -j$(nproc) V=s || make -j1 V=s
 
-    # 固件
     - name: Collect firmware
       run: |
         mkdir -p artifacts/firmware
-        find openwrt/bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.squashfs*" \) \
-          -exec cp {} artifacts/firmware/ \;
+        cp openwrt/bin/targets/*/*/*.{bin,img,squashfs*} artifacts/firmware/ 2>/dev/null || true
         (cd artifacts/firmware && sha256sum * > sha256sums)
 
-    # 单独打包 kmod-mtd-rw ipk
     - name: Collect kmod-mtd-rw ipk
       run: |
-        mkdir -p artifacts/ipk-control
-        find openwrt/bin/packages -type f -name "kmod-mtd-rw*" -exec cp {} artifacts/ipk-control/ \;
-        (cd artifacts/ipk-control && sha256sum * > sha256sums || true)
+        mkdir -p artifacts/ipk
+        find openwrt/bin/packages -name "kmod-mtd-rw*" -exec cp {} artifacts/ipk/ \; 2>/dev/null || true
+        (cd artifacts/ipk && sha256sum * > sha256sums)
 
-    # 上传
     - name: Upload firmware
       uses: actions/upload-artifact@v4
       with:
-        name: Firmware-locked-${{ github.sha }}
+        name: Firmware-${{ github.sha }}
         path: artifacts/firmware/*
 
     - name: Upload kmod-mtd-rw ipk
       uses: actions/upload-artifact@v4
       with:
         name: kmod-mtd-rw-ipk-${{ github.sha }}
-        path: artifacts/ipk-control/*
+        path: artifacts/ipk/*
 
     - name: Enable SSH debug
       if: inputs.ssh_actions == true
