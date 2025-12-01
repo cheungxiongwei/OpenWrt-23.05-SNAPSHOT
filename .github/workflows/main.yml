@@ -105,6 +105,12 @@ jobs:
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 V=s
 
+    - name: SSH Debug (tmate)
+      if: ${{ failure() && github.event.inputs.ssh == 'true' }}
+      uses: mxschmitt/action-tmate@v3
+      with:
+        limit-access-to-actor: true
+        
     - name: Organize Artifacts
       id: organize
       if: success()
