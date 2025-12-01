@@ -40,7 +40,7 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        docker rmi `docker images -q`
+        docker images -q | xargs docker rmi
         sudo -E apt -yqq update
         sudo -E apt -yqq install build-essential clang flex bison g++ gawk cc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget
         sudo -E apt -yqq autoremove --purge
