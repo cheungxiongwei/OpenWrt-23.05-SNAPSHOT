@@ -11,10 +11,10 @@ on:
 env:
   # 1. 源码配置
   REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: openwrt-23.05
+  REPO_BRANCH: openwrt-24.10
   # 指定 Commit Hash 以匹配你当前的固件版本 (OpenWrt 23.05-SNAPSHOT r23001+886-38c150612c)
   # 如果想编译分支最新版，请将此项留空
-  REPO_COMMIT: 38c150612c 
+  REPO_COMMIT: "" 
 
   # 2. 硬件目标配置 (Cudy TR3000)
   TARGET_BOARD: mediatek
@@ -67,11 +67,6 @@ jobs:
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        
-    - name: Apply Patch
-      working-directory: ./openwrt
-      run: |
-        git apply ../patches/100-c90-decl-fix.patch
         
     - name: Generate Configuration
       working-directory: ./openwrt
